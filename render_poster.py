@@ -8,12 +8,14 @@ scenes with heavy black outlines. Byte-deterministic: fixed fonts,
 no randomness, no timestamps, no network.
 """
 
+import math
 import os
 
 from PIL import Image, ImageDraw, ImageFilter, ImageFont
 
 W, H = 1024, 1024
 MARGIN = 20
+SS = 4  # supersample factor for pictorial layers (icons, scenes, map)
 
 PAPER = (250, 248, 242)
 CARD = (255, 253, 248)
@@ -253,132 +255,205 @@ def chip(draw, x, y, size, number, fnt=None):
     draw.text((x + (size - tw) / 2, y + (size - th) / 2 - 1),
               label, font=fnt, fill=(255, 255, 255))
 
+
+def _qbez(p0, p1, p2, t):
+    """Point on the quadratic Bezier from p0 via p1 to p2 at t in [0, 1]."""
+    u = 1 - t
+    return (u * u * p0[0] + 2 * u * t * p1[0] + t * t * p2[0],
+            u * u * p0[1] + 2 * u * t * p1[1] + t * t * p2[1])
+
+
 # ---------------------------------------------------------------- scenes
-def draw_motif(draw, box, kind, label=None):
-    """Linocut motif inside box (x0, y0, x1, y1): heavy black outlines,
-    flat red/teal/paper fills. label is drawn only in hero-size scenes."""
+def draw_motif(img, draw, box, kind, label=None):
+    """Pictorial motif inside box (x0, y0, x1, y1), rendered at 4x on
+    its own layer and LANCZOS-downscaled, so every edge is antialiased
+    instead of stair-stepped. Flat red/teal/paper fills, one consistent
+    stroke weight (3 px at final size). label is drawn only in
+    hero-size scenes."""
     x0, y0, x1, y1 = box
+    w, h = int(round(x1 - x0)), int(round(y1 - y0))
+    layer = Image.new("RGBA", (w * SS, h * SS), (0, 0, 0, 0))
+    ld = ImageDraw.Draw(layer)
+    x0, y0, x1, y1 = 0, 0, w * SS, h * SS
     w_, h_ = x1 - x0, y1 - y0
     cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
-    o = 3  # outline width
+    sw = 3 * SS  # one consistent stroke weight (3 px at final size)
     if kind == "chart":
-        base = y1 - 8
+        base = y1 - 8 * SS
         bars = [(0.12, 0.35), (0.32, 0.55), (0.52, 0.45), (0.72, 0.80)]
         for fx, fh in bars:
             bx = x0 + fx * w_
             bw = w_ * 0.14
-            draw.rectangle([bx, base - fh * (h_ - 16), bx + bw, base],
-                           fill=TEAL, outline=INK, width=o)
-        draw.line([(x0 + 4, base), (x1 - 4, base)], fill=INK, width=o)
-        draw.line([(x0 + 4, base), (x0 + w_ * 0.86, y0 + 8)],
-                  fill=RED, width=3)
+            ld.rectangle([bx, base - fh * (h_ - 16 * SS), bx + bw, base],
+                         fill=TEAL, outline=INK, width=sw)
+        ld.line([(x0 + 4 * SS, base), (x1 - 4 * SS, base)], fill=INK,
+                width=sw)
+        ld.line([(x0 + 4 * SS, base), (x0 + w_ * 0.86, y0 + 8 * SS)],
+                fill=RED, width=sw)
     elif kind == "ground":
-        draw.rectangle([x0, y0 + h_ * 0.55, x1, y1], fill=INK)
+        ld.rectangle([x0, y0 + h_ * 0.55, x1, y1], fill=INK)
         for fx, fw, fh in [(0.08, 0.16, 0.34), (0.30, 0.12, 0.46),
                            (0.48, 0.18, 0.28), (0.70, 0.14, 0.40)]:
             bx = x0 + fx * w_
-            draw.rectangle([bx, y0 + h_ * 0.55 - fh * h_ * 0.55,
-                            bx + fw * w_, y0 + h_ * 0.55],
-                           fill=PAPER, outline=INK, width=o)
-        draw.line([(x0 + 6, y0 + h_ * 0.30), (x1 - w_ * 0.18, y0 + h_ * 0.30)],
-                  fill=RED, width=4)
-        draw.polygon([(x1 - w_ * 0.18, y0 + h_ * 0.30 - 7),
-                      (x1 - w_ * 0.18, y0 + h_ * 0.30 + 7),
-                      (x1 - 4, y0 + h_ * 0.30)], fill=RED)
+            ld.rectangle([bx, y0 + h_ * 0.55 - fh * h_ * 0.55,
+                          bx + fw * w_, y0 + h_ * 0.55],
+                         fill=PAPER, outline=INK, width=sw)
+        ay = y0 + h_ * 0.30
+        ld.line([(x0 + 6 * SS, ay), (x1 - w_ * 0.18, ay)], fill=RED,
+                width=sw)
+        ld.polygon([(x1 - w_ * 0.18, ay - 7 * SS),
+                    (x1 - w_ * 0.18, ay + 7 * SS),
+                    (x1 - 4 * SS, ay)], fill=RED)
     elif kind == "lock":
         bw, bh = w_ * 0.42, h_ * 0.46
         bx0, by0 = cx - bw / 2, cy - bh * 0.28
-        draw.arc([cx - bw * 0.32, by0 - bh * 0.55, cx + bw * 0.32,
-                  by0 + bh * 0.10], 180, 360, fill=INK, width=4)
-        draw.rounded_rectangle([bx0, by0, bx0 + bw, by0 + bh], radius=4,
-                               fill=RED, outline=INK, width=o)
-        draw.ellipse([cx - 4, by0 + bh * 0.30, cx + 4, by0 + bh * 0.30 + 8],
-                     fill=PAPER)
-        draw.line([(cx, by0 + bh * 0.36), (cx, by0 + bh * 0.62)],
-                  fill=PAPER, width=3)
-        draw.line([(bx0 - 8, by0 + bh + 8), (bx0 + bw + 8, by0 - 6)],
-                  fill=INK, width=2)
+        ld.arc([cx - bw * 0.32, by0 - bh * 0.55, cx + bw * 0.32,
+                by0 + bh * 0.10], 180, 360, fill=INK, width=sw)
+        ld.rounded_rectangle([bx0, by0, bx0 + bw, by0 + bh], radius=4 * SS,
+                             fill=RED, outline=INK, width=sw)
+        ld.ellipse([cx - 4 * SS, by0 + bh * 0.30, cx + 4 * SS,
+                    by0 + bh * 0.30 + 8 * SS], fill=PAPER)
+        ld.line([(cx, by0 + bh * 0.36), (cx, by0 + bh * 0.62)],
+                fill=PAPER, width=sw)
+        ld.line([(bx0 - 8 * SS, by0 + bh + 8 * SS),
+                 (bx0 + bw + 8 * SS, by0 - 6 * SS)], fill=INK, width=sw)
     elif kind == "bat":
-        draw.line([(x0 + w_ * 0.18, y1 - 8), (x0 + w_ * 0.78, y0 + 10)],
-                  fill=INK, width=5)
-        draw.ellipse([x0 + w_ * 0.62, y0 + 4, x0 + w_ * 0.92, y0 + h_ * 0.42],
-                     fill=RED, outline=INK, width=o)
-        draw.ellipse([x0 + w_ * 0.08, y0 + h_ * 0.45, x0 + w_ * 0.30,
-                      y0 + h_ * 0.72], fill=TEAL, outline=INK, width=o)
+        # Cricket bat: one bold diagonal blade with rounded ends, one ball.
+        x_a, y_a = x0 + w_ * 0.14, y1 - h_ * 0.12
+        x_b, y_b = x0 + w_ * 0.52, y0 + h_ * 0.18
+        ld.line([(x_a, y_a), (x_b, y_b)], fill=INK, width=6 * SS)
+        r = 3 * SS
+        ld.ellipse([x_a - r, y_a - r, x_a + r, y_a + r], fill=INK)
+        ld.ellipse([x_b - r, y_b - r, x_b + r, y_b + r], fill=INK)
+        br = h_ * 0.20
+        bcx, bcy = x0 + w_ * 0.74, y0 + h_ * 0.38
+        ld.ellipse([bcx - br, bcy - br, bcx + br, bcy + br],
+                   fill=RED, outline=INK, width=sw)
     elif kind == "sorry":
-        draw.rectangle([x0 + w_ * 0.10, y0 + h_ * 0.18,
-                        x1 - w_ * 0.10, y0 + h_ * 0.72],
-                       fill=PAPER, outline=INK, width=o)
-        draw.line([(x0 + w_ * 0.22, y0 + h_ * 0.36),
-                   (x1 - w_ * 0.22, y0 + h_ * 0.36)], fill=TEAL, width=3)
-        draw.line([(x0 + w_ * 0.22, y0 + h_ * 0.52),
-                   (x1 - w_ * 0.32, y0 + h_ * 0.52)], fill=TEAL, width=3)
+        # Heart: one smooth parametric outline, flat red fill.
+        pts = []
+        for i in range(65):
+            t = 2 * math.pi * i / 64
+            hx = 16 * (math.sin(t) ** 3)
+            hy = -(13 * math.cos(t) - 5 * math.cos(2 * t)
+                   - 2 * math.cos(3 * t) - math.cos(4 * t))
+            pts.append((hx, hy))
+        sc = min(w_ * 0.30 / 16.0, h_ * 0.36 / 22.0)
+        ox, oy = cx, cy - 6 * sc
+        poly = [(ox + px * sc, oy + py * sc) for px, py in pts]
+        ld.polygon(poly, fill=RED, outline=INK, width=sw)
     elif kind == "handshake":
-        draw.ellipse([x0 + w_ * 0.12, cy - h_ * 0.22, x0 + w_ * 0.42,
-                      cy + h_ * 0.22], fill=TEAL, outline=INK, width=o)
-        draw.ellipse([x1 - w_ * 0.42, cy - h_ * 0.22, x1 - w_ * 0.12,
-                      cy + h_ * 0.22], fill=RED, outline=INK, width=o)
-        draw.line([(x0 + w_ * 0.38, cy), (x1 - w_ * 0.38, cy)],
-                  fill=INK, width=3)
+        # Two interlocked rings: partnership, one stroke weight.
+        r = h_ * 0.34
+        ld.ellipse([cx - w_ * 0.14 - r, cy - r, cx - w_ * 0.14 + r, cy + r],
+                   outline=TEAL, width=sw)
+        ld.ellipse([cx + w_ * 0.14 - r, cy - r, cx + w_ * 0.14 + r, cy + r],
+                   outline=RED, width=sw)
     elif kind == "flame":
-        draw.polygon([(cx, y0 + 4), (cx + w_ * 0.22, cy),
-                      (cx + w_ * 0.10, cy + h_ * 0.18),
-                      (cx + w_ * 0.30, y1 - 6), (cx - w_ * 0.30, y1 - 6),
-                      (cx - w_ * 0.10, cy + h_ * 0.18),
-                      (cx - w_ * 0.22, cy)], fill=RED, outline=INK)
-        draw.ellipse([cx - w_ * 0.08, cy, cx + w_ * 0.08, cy + h_ * 0.22],
-                     fill=(255, 210, 60))
+        # Smooth teardrop flame: two quadratic Beziers, round base.
+        tip = (cx + w_ * 0.06, y0 + 2 * SS)
+        l_base = (cx - w_ * 0.20, y0 + h_ * 0.72)
+        r_base = (cx + w_ * 0.20, y0 + h_ * 0.72)
+        pts = []
+        for i in range(25):
+            pts.append(_qbez(l_base, (cx - w_ * 0.23, y0 + h_ * 0.10),
+                             tip, i / 24))
+        for i in range(1, 25):
+            pts.append(_qbez(tip, (cx + w_ * 0.23, y0 + h_ * 0.22),
+                             r_base, i / 24))
+        for i in range(1, 25):
+            a = math.pi * i / 24
+            pts.append((cx + w_ * 0.20 * math.cos(a),
+                        y0 + h_ * 0.72 + h_ * 0.26 * math.sin(a)))
+        ld.polygon(pts, fill=RED, outline=INK, width=sw)
+        ld.ellipse([cx - w_ * 0.07, cy - h_ * 0.02, cx + w_ * 0.07,
+                    cy + h_ * 0.24], fill=(255, 210, 60))
     elif kind == "speech":
-        draw.rectangle([x0 + w_ * 0.10, y0 + h_ * 0.14,
-                        x1 - w_ * 0.10, y0 + h_ * 0.66],
-                       fill=PAPER, outline=INK, width=o)
-        draw.polygon([(x0 + w_ * 0.28, y0 + h_ * 0.66),
-                      (x0 + w_ * 0.44, y0 + h_ * 0.66),
-                      (x0 + w_ * 0.30, y1 - 4)], fill=PAPER, outline=INK)
-        draw.line([(x0 + w_ * 0.24, y0 + h_ * 0.34),
-                   (x1 - w_ * 0.24, y0 + h_ * 0.34)], fill=TEAL, width=3)
-        draw.line([(x0 + w_ * 0.24, y0 + h_ * 0.50),
-                   (x1 - w_ * 0.36, y0 + h_ * 0.50)], fill=TEAL, width=3)
+        # Rounded speech bubble with a tail and two text lines.
+        ld.rounded_rectangle([x0 + w_ * 0.10, y0 + h_ * 0.14,
+                              x1 - w_ * 0.10, y0 + h_ * 0.66],
+                             radius=4 * SS, fill=PAPER, outline=INK, width=sw)
+        tx, ty = x0 + w_ * 0.30, y1 - 4 * SS
+        ld.polygon([(x0 + w_ * 0.28, y0 + h_ * 0.66),
+                    (x0 + w_ * 0.44, y0 + h_ * 0.66), (tx, ty)],
+                   fill=PAPER)
+        ld.line([(x0 + w_ * 0.28, y0 + h_ * 0.66), (tx, ty)], fill=INK,
+                width=sw)
+        ld.line([(x0 + w_ * 0.44, y0 + h_ * 0.66), (tx, ty)], fill=INK,
+                width=sw)
+        ld.line([(x0 + w_ * 0.24, y0 + h_ * 0.34),
+                 (x1 - w_ * 0.24, y0 + h_ * 0.34)], fill=TEAL, width=sw)
+        ld.line([(x0 + w_ * 0.24, y0 + h_ * 0.50),
+                 (x1 - w_ * 0.36, y0 + h_ * 0.50)], fill=TEAL, width=sw)
     elif kind == "home":
-        draw.polygon([(x0 + 4, cy), (cx, y0 + 4), (x1 - 4, cy)],
-                     fill=RED, outline=INK)
-        draw.rectangle([x0 + w_ * 0.18, cy, x1 - w_ * 0.18, y1 - 4],
-                       fill=PAPER, outline=INK, width=o)
-        draw.rectangle([cx - 5, y1 - h_ * 0.34, cx + 5, y1 - 4],
-                       fill=INK)
+        ld.polygon([(x0 + 4 * SS, cy), (cx, y0 + 4 * SS), (x1 - 4 * SS, cy)],
+                   fill=RED, outline=INK, width=sw)
+        ld.rectangle([x0 + w_ * 0.18, cy, x1 - w_ * 0.18, y1 - 4 * SS],
+                     fill=PAPER, outline=INK, width=sw)
+        ld.rectangle([cx - 5 * SS, y1 - h_ * 0.34, cx + 5 * SS,
+                      y1 - 4 * SS], fill=INK)
     elif kind == "cross":
-        draw.rectangle([cx - 5, y0 + 4, cx + 5, y1 - 4], fill=TEAL,
-                       outline=INK, width=2)
-        draw.rectangle([x0 + 6, cy - 5, x1 - 6, cy + 5], fill=TEAL,
-                       outline=INK, width=2)
+        # Plus sign as one clean 12-point polygon, no internal lines.
+        a = 5 * SS
+        x_lo, x_hi = x0 + 6 * SS, x1 - 6 * SS
+        y_lo, y_hi = y0 + 4 * SS, y1 - 4 * SS
+        ld.polygon([(cx - a, y_lo), (cx + a, y_lo), (cx + a, cy - a),
+                    (x_hi, cy - a), (x_hi, cy + a), (cx + a, cy + a),
+                    (cx + a, y_hi), (cx - a, y_hi), (cx - a, cy + a),
+                    (x_lo, cy + a), (x_lo, cy - a), (cx - a, cy - a)],
+                   fill=TEAL, outline=INK, width=sw)
     elif kind == "ballot":
-        draw.rectangle([x0 + w_ * 0.14, y0 + h_ * 0.30, x1 - w_ * 0.14,
-                        y1 - 4], fill=PAPER, outline=INK, width=o)
-        draw.line([(x0 + w_ * 0.30, y0 + 4), (x1 - w_ * 0.30, y0 + 4)],
-                  fill=INK, width=3)
-        draw.line([(cx - 6, y0 + h_ * 0.52), (cx - 1, y0 + h_ * 0.66),
-                   (cx + 7, y0 + h_ * 0.40)], fill=RED, width=3)
+        ld.rectangle([x0 + w_ * 0.14, y0 + h_ * 0.30, x1 - w_ * 0.14,
+                      y1 - 4 * SS], fill=PAPER, outline=INK, width=sw)
+        ld.line([(x0 + w_ * 0.30, y0 + 4 * SS), (x1 - w_ * 0.30, y0 + 4 * SS)],
+                fill=INK, width=sw)
+        ld.line([(cx - 6 * SS, y0 + h_ * 0.52), (cx - 1 * SS, y0 + h_ * 0.66),
+                 (cx + 7 * SS, y0 + h_ * 0.40)], fill=RED, width=sw,
+                joint="curve")
     elif kind == "gavel":
-        draw.line([(x0 + w_ * 0.16, y1 - 8), (x1 - w_ * 0.16, y0 + 10)],
-                  fill=INK, width=4)
-        draw.rectangle([x0 + w_ * 0.52, y0 + 4, x1 - w_ * 0.08,
-                        y0 + h_ * 0.34], fill=RED, outline=INK, width=o)
+        # Gavel: rotated head block plus handle, one stroke weight.
+        ang = -0.61
+        ca, sa = math.cos(ang), math.sin(ang)
+        hx, hy = cx + w_ * 0.18, y0 + h_ * 0.28
+        hw, hh = w_ * 0.21, h_ * 0.17
+        corners = []
+        for dx, dy in [(-hw, -hh), (hw, -hh), (hw, hh), (-hw, hh)]:
+            corners.append((hx + dx * ca - dy * sa,
+                            hy + dx * sa + dy * ca))
+        ld.polygon(corners, fill=RED, outline=INK, width=sw)
+        hx0, hy0 = cx + w_ * 0.05, y0 + h_ * 0.45
+        hx1, hy1 = x0 + w_ * 0.16, y1 - h_ * 0.12
+        ld.line([(hx0, hy0), (hx1, hy1)], fill=INK, width=sw)
+        r = sw / 2
+        ld.ellipse([hx0 - r, hy0 - r, hx0 + r, hy0 + r], fill=INK)
+        ld.ellipse([hx1 - r, hy1 - r, hx1 + r, hy1 + r], fill=INK)
     elif kind == "coin":
-        draw.ellipse([cx - h_ * 0.30, cy - h_ * 0.30, cx + h_ * 0.30,
-                      cy + h_ * 0.30], fill=(255, 210, 60), outline=INK,
-                     width=o)
-        draw.text((cx - 5, cy - 10), "$", font=font(16, bold=True), fill=INK)
-    if label and h_ >= 60:
-        lf = font(15, bold=True)
-        tw = draw.textlength(label, font=lf)
-        tx0, ty0 = cx - tw / 2 - 5, y0 + h_ - 22
-        draw.rectangle([tx0, ty0, tx0 + tw + 10, ty0 + 18],
-                       fill=PAPER, outline=INK, width=2)
-        draw.text((cx - tw / 2, ty0 + 1), label, font=lf, fill=INK)
+        # Gold disc with a "$" fitted inside it (never overflowing).
+        r = h_ * 0.30
+        ld.ellipse([cx - r, cy - r, cx + r, cy + r],
+                   fill=(255, 210, 60), outline=INK, width=sw)
+        size = int(h_ * 0.42)
+        while size > 8:
+            fnt = font(size, bold=True)
+            tw = ld.textlength("$", font=fnt)
+            if tw <= r * 1.5:
+                break
+            size -= 2
+        th = fnt.getbbox("$")[3] - fnt.getbbox("$")[1]
+        ld.text((cx - tw / 2, cy - th / 2 - 1), "$", font=fnt, fill=INK)
+    if label and h >= 60:
+        lf = font(15 * SS, bold=True)
+        tw = ld.textlength(label, font=lf)
+        tx0, ty0 = cx - tw / 2 - 5 * SS, y0 + h_ - 22 * SS
+        ld.rectangle([tx0, ty0, tx0 + tw + 10 * SS, ty0 + 18 * SS],
+                     fill=PAPER, outline=INK, width=2 * SS)
+        ld.text((cx - tw / 2, ty0 + 1 * SS), label, font=lf, fill=INK)
+    small = layer.resize((w, h), Image.LANCZOS)
+    img.paste(small, (int(round(box[0])), int(round(box[1]))), small)
 
 
 # ---------------------------------------------------------------- cards
-def draw_hero(draw, box, story):
+def draw_hero(img, draw, box, story):
     n, _region, _city, _lon, _lat, title, sub, kind = story
     x0, y0, x1, y1 = box
     draw.rectangle([x0, y0, x1, y1], fill=CARD, outline=INK, width=2)
@@ -386,7 +461,7 @@ def draw_hero(draw, box, story):
     scene = (x0 + 8, y0 + 12, x1 - 8, y0 + 92)
     draw.rectangle(scene, fill=SEA, outline=INK, width=2)
     label = {1: "4.9%", 2: "GAZA", 3: "CIA"}.get(n)
-    draw_motif(draw, scene, kind, label=label)
+    draw_motif(img, draw, scene, kind, label=label)
     chip(draw, x0 + 8, y0 + 100, 20, n)
     tx = x0 + 34
     lines = wrap_lines(draw, title, font(16, bold=True), x1 - tx - 8, 2)
@@ -399,13 +474,13 @@ def draw_hero(draw, box, story):
                  font(11), GREY, (x0 + 8, y0 + 148, x1 - 8, y0 + 168))
 
 
-def draw_featured(draw, box, story):
+def draw_featured(img, draw, box, story):
     n, _region, _city, _lon, _lat, title, kind = story
     x0, y0, x1, y1 = box
     draw.rectangle([x0, y0, x1, y1], fill=CARD, outline=INK, width=1)
     scene = (x0 + 1, y0 + 1, x1 - 1, y0 + 27)
     draw.rectangle(scene, fill=SEA)
-    draw_motif(draw, scene, kind)
+    draw_motif(img, draw, scene, kind)
     chip(draw, x0 + 5, y0 + 31, 16, n, fnt=font(9, bold=True))
     tx = x0 + 26
     lines = wrap_lines(draw, title, font(11, bold=True), x1 - tx - 6, 2)
@@ -484,49 +559,60 @@ def project(lon, lat, box):
     return px, py
 
 
-def draw_map(draw, y):
+def draw_map(img, draw, y):
     x0, x1 = MARGIN, W - MARGIN
     draw_checked(draw, (x0 + 2, y), "WHERE IT HAPPENED - 46 STORIES ON THE MAP",
                  font(12, bold=True), INK, (x0, y - 2, x0 + 420, y + 16))
     box = (x0, y + 20, x1, y + 146)
-    draw.rectangle(box, fill=SEA, outline=INK, width=2)
+    mw, mh = int(round(box[2] - box[0])), int(round(box[3] - box[1]))
+    layer = Image.new("RGBA", (mw * SS, mh * SS), (0, 0, 0, 0))
+    ld = ImageDraw.Draw(layer)
+    ld.rectangle([0, 0, mw * SS - 1, mh * SS - 1], fill=SEA, outline=INK,
+                 width=2 * SS)
+    LW, LH = mw * SS, mh * SS
+
+    def mproject(lon, lat):
+        return ((lon + 180.0) / 360.0 * LW, (83.0 - lat) / 138.0 * LH)
+
     for poly in CONTINENTS:
-        pts = [project(lon, lat, box) for lon, lat in poly]
-        draw.polygon(pts, fill=LAND, outline=INK)
+        pts = [mproject(lon, lat) for lon, lat in poly]
+        ld.polygon(pts, fill=LAND, outline=INK, width=SS)
     # Stagger pins/dots that share a city so numbers never collide.
     seen = {}
 
-    def place(lon, lat):
+    def mplace(lon, lat):
         key = (round(lon, 1), round(lat, 1))
         k = seen.get(key, 0)
         seen[key] = k + 1
-        px, py = project(lon, lat, box)
-        return px + (k % 3) * 8 - 8, py + (k // 3) * 8 - 4
+        px, py = mproject(lon, lat)
+        return px + ((k % 3) * 8 - 8) * SS, py + ((k // 3) * 8 - 4) * SS
 
     for n, _r, _c, lon, lat, _t, _s, _k in HEROES:
-        px, py = place(lon, lat)
-        s = 15
-        draw.rectangle([px - s / 2, py - s / 2, px + s / 2, py + s / 2],
-                       fill=RED, outline=INK, width=1)
+        px, py = mplace(lon, lat)
+        s = 15 * SS
+        ld.rectangle([px - s / 2, py - s / 2, px + s / 2, py + s / 2],
+                     fill=RED, outline=INK, width=SS)
         label = str(n)
-        fnt = font(9, bold=True)
-        tw = draw.textlength(label, font=fnt)
-        draw.text((px - tw / 2, py - 6), label, font=fnt,
-                  fill=(255, 255, 255))
+        fnt = font(9 * SS, bold=True)
+        tw = ld.textlength(label, font=fnt)
+        ld.text((px - tw / 2, py - 6 * SS), label, font=fnt,
+                fill=(255, 255, 255))
     for n, _r, _c, lon, lat, _t, _k in FEATURED:
-        px, py = place(lon, lat)
-        s = 15
-        draw.rectangle([px - s / 2, py - s / 2, px + s / 2, py + s / 2],
-                       fill=RED, outline=INK, width=1)
+        px, py = mplace(lon, lat)
+        s = 15 * SS
+        ld.rectangle([px - s / 2, py - s / 2, px + s / 2, py + s / 2],
+                     fill=RED, outline=INK, width=SS)
         label = str(n)
-        fnt = font(9, bold=True)
-        tw = draw.textlength(label, font=fnt)
-        draw.text((px - tw / 2, py - 6), label, font=fnt,
-                  fill=(255, 255, 255))
+        fnt = font(9 * SS, bold=True)
+        tw = ld.textlength(label, font=fnt)
+        ld.text((px - tw / 2, py - 6 * SS), label, font=fnt,
+                fill=(255, 255, 255))
     for n, _t, lon, lat in ALSO_ON:
-        px, py = place(lon, lat)
-        draw.ellipse([px - 3, py - 3, px + 3, py + 3], fill=TEAL,
-                     outline=INK, width=1)
+        px, py = mplace(lon, lat)
+        ld.ellipse([px - 3 * SS, py - 3 * SS, px + 3 * SS, py + 3 * SS],
+                   fill=TEAL, outline=INK, width=SS)
+    small = layer.resize((mw, mh), Image.LANCZOS)
+    img.paste(small, (x0, y + 20), small)
     draw_checked(draw, (x0 + 2, y + 150),
                  "RED SQUARES 1-13 FEATURED  -  TEAL DOTS 14-46 ALSO ON  -  7 REGIONS",
                  font(10, bold=True), GREY,
@@ -587,20 +673,20 @@ def render():
     hx0, hx1 = MARGIN, W - MARGIN
     hw = (hx1 - hx0 - 16) / 3
     for i, story in enumerate(HEROES):
-        draw_hero(draw, (hx0 + i * (hw + 8), y + 4,
-                         hx0 + i * (hw + 8) + hw, y + 174), story)
+        draw_hero(img, draw, (hx0 + i * (hw + 8), y + 4,
+                              hx0 + i * (hw + 8) + hw, y + 174), story)
     y += 180
     # Featured: 2 rows x 5.
     fw = (hx1 - hx0 - 32) / 5
     for row in range(2):
         for col in range(5):
             story = FEATURED[row * 5 + col]
-            draw_featured(draw, (hx0 + col * (fw + 8), y + row * 92,
-                                 hx0 + col * (fw + 8) + fw, y + row * 92 + 84),
-                          story)
+            draw_featured(img, draw, (hx0 + col * (fw + 8), y + row * 92,
+                                      hx0 + col * (fw + 8) + fw,
+                                      y + row * 92 + 84), story)
     y += 192
     y = draw_kpi(draw, y)
-    y = draw_map(draw, y + 6)
+    y = draw_map(img, draw, y + 6)
     y = draw_also_on(draw, y + 6)
     y = draw_date_check(draw, y + 4)
     y = draw_footer(draw, y + 4)
